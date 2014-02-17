@@ -1,0 +1,585 @@
+#!/usr/bin/perl -w
+
+#***************************************************************************
+# File: KP-control-gtk.prl
+#
+# Virtual Humans
+# Master in Computer Science
+# Christian Jacquemin, University Paris 11
+#
+# Copyright (C) 2008 University Paris 11 
+# This file is provided without support, instruction, or implied
+# warranty of any kind.  University Paris 11 makes no guarantee of its
+# fitness for a particular purpose and is not liable under any
+# circumstances for any damages or loss whatsoever arising from the use
+# or inability to use this file or items derived from it.
+#****************************************************************************
+
+# http://www.gtk.org/tutorial1.2/
+# http://gtk2-perl.sourceforge.net/doc/intro/
+# http://gtk2-perl.sourceforge.net/doc/pod/
+# http://gtk2-perl.sourceforge.net/doc/gtk2-perl-tut/
+# http://pagesperso-orange.fr/gtk2-perl/Gtk2perl_tutoriel.html
+
+use strict ;
+
+use Gtk2 '-init' ;
+
+use constant TRUE => 1 ;
+use constant FALSE => 0 ;
+
+# This program generates an interface for the definition
+# of keyframes for a keypoint-based animation
+
+# the program takes as input a cpp file that contains
+# - 1 table of K strings associated with K keypoints
+# - 3 tables of K F-dimensional float arrays (F is the number of keyframes)
+#   each table is associated with 1 coordinate
+# the format of the file is as follows for 4 keypoints and 10 frames
+
+# char tab_ID[4][16] = { "8.1" , "8.2" , "8.3" , "8.4" };
+# float tab_KF_x[4][10] = { 
+# { 0.01 , 0.02 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.03 , 0.04 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.05 , 0.06 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.07 , 0.08 , 0.00 , 0.00 } 
+#  }; 
+# float tab_KF_y[4][10] = { 
+# { 0.09 , 0.08 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.07 , 0.06 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.05 , 0.04 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.03 , 0.02 , 0.00 , 0.00 } 
+#  }; 
+# float tab_KF_z[4][10] = { 
+# { 0.04 , 0.05 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.07 , 0.09 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.01 , 0.03 , 0.00 , 0.00 , 0.00 , 0.00 } ,
+# { 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.02 , 0.08 , 0.00 , 0.00 } 
+#  }; 
+
+# the interface contains 2 menus to select a keypoint k and a frame number f
+# and 3 sliders to modify the x y z coordinates of the k-th keypoint
+# at frame f
+# each time a value is modified, a message is sent to the
+# animation application so that it can update the keyframe graphics.
+
+# a new data structure is automatically generated when quitting
+# the application. It never overlaps the existing data and 
+# creates successive versions of the data.
+
+
+###############################################################
+#      SOCKET FOR UDP CONNECTION
+###############################################################
+my $HOSTNAME = "127.0.0.1";
+my $PORTNO = "1979";
+use Socket;
+socket(SOCKET, PF_INET, SOCK_DGRAM, getprotobyname("udp")) 
+    or die "socket: $!";
+my $ipaddr   = inet_aton($HOSTNAME);
+my $portaddr = sockaddr_in($PORTNO, $ipaddr);
+
+
+###############################################################
+#      WORKING VARIABLES
+###############################################################
+# list of key-point ID
+my @KP_ID_list;
+# current key-point ID
+my $Cur_KP_ID = "";
+# number of keyframes
+my $Nb_Keyframes = 10;
+#current keyframe
+my $Cur_KF = 1;
+#keypoint positions
+my %KP_Pos_x;
+my %KP_Pos_y;
+my %KP_Pos_z;
+#message emission (postponed to avoid duplicates in case
+# of mutiple value assignments)
+my $message_output = TRUE;
+
+###############################################################
+#      LOADS EXISTING ANIMATION
+###############################################################
+&load_KFs;
+
+###############################################################
+###############################################################
+#      BUILDS THE INTERFACE AND ATTACHES CALLBACK FUNCTIONS
+###############################################################
+###############################################################
+# Window creation
+my $window = Gtk2::Window->new( "toplevel" ) ;
+$window->set_title( "Viseme editor" ) ;
+$window->set_default_size(300,300);
+$window->signal_connect( "destroy" , sub { Gtk2->main_quit ; } ) ;
+
+# A root vertical box that includes all the widgets
+my $box_root = Gtk2::VBox->new( FALSE, 0 ) ;
+$window->add( $box_root ) ;
+$box_root->show() ;
+
+###############################################################
+#   3 SLIDERS: X, Y Z translation values
+###############################################################
+# Adjustment creation: an adjustment defines the value and range of the slider
+# value, lower, upper, step_increment, page_increment, page_size
+# (page_size is only useful for scrollbar widgets)
+my $adj1 = Gtk2::Adjustment->new( 0.0 , -0.3 , 0.3 , 0.001 , 0.001 , 0.001 ) ;
+$adj1->signal_connect("value_changed",\&KP_transl_value,'x');
+my $adj2 = Gtk2::Adjustment->new( 0.0 , -0.3 , 0.3 , 0.001 , 0.001 , 0.001 ) ;
+$adj2->signal_connect("value_changed",\&KP_transl_value,'y');
+my $adj3 = Gtk2::Adjustment->new( 0.0 , -0.3 , 0.3 , 0.001 , 0.001 , 0.001 ) ;
+$adj3->signal_connect("value_changed",\&KP_transl_value,'z');
+
+#############
+# X translation of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# A new horizontal box added to the vertical box and contains 2 widgets
+my $box_slider1 = Gtk2::HBox->new( FALSE, 10 ) ;
+$box_slider1->set_border_width( 10 ) ;
+$box_root->pack_start( $box_slider1, TRUE, TRUE, 0 ) ;
+$box_slider1->show() ;
+# a label
+my $label1 = Gtk2::Label->new( "x" ) ;
+$box_slider1->pack_start( $label1, FALSE, FALSE, 0 ) ;
+$label1->show() ;
+# An horizontal slider
+my $hor_scale1 = Gtk2::HScale->new( $adj1 ) ;
+$hor_scale1->set_digits( 3 ) ; 
+$box_slider1->pack_start( $hor_scale1, TRUE, TRUE, 0 ) ;
+$hor_scale1->show() ;
+
+#############
+# Y translation of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# A new horizontal box added to the vertical box and contains 2 widgets
+my $box_slider2 = Gtk2::HBox->new( FALSE, 10 ) ;
+$box_slider2->set_border_width( 10 ) ;
+$box_root->pack_start( $box_slider2, TRUE, TRUE, 0 ) ;
+$box_slider2->show() ;
+# a label
+my $label2 = Gtk2::Label->new( "y" ) ;
+$box_slider2->pack_start( $label2, FALSE, FALSE, 0 ) ;
+$label2->show() ;
+# An horizontal slider
+my $hor_scale2 = Gtk2::HScale->new( $adj2 ) ;
+$hor_scale2->set_digits( 3 ) ; 
+$box_slider2->pack_start( $hor_scale2, TRUE, TRUE, 0 ) ;
+$hor_scale2->show() ;
+
+#############
+# Z translation of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# A new horizontal box added to the vertical box and contains 2 widgets
+my $box_slider3 = Gtk2::HBox->new( FALSE, 10 ) ;
+$box_slider3->set_border_width( 10 ) ;
+$box_root->pack_start( $box_slider3, TRUE, TRUE, 0 ) ;
+$box_slider3->show() ;
+# a label
+my $label3 = Gtk2::Label->new( "z" ) ;
+$box_slider3->pack_start( $label3, FALSE, FALSE, 0 ) ;
+$label3->show() ;
+# An horizontal slider
+my $hor_scale3 = Gtk2::HScale->new( $adj3 ) ;
+$hor_scale3->set_digits( 3 ) ; 
+$box_slider3->pack_start( $hor_scale3, TRUE, TRUE, 0 ) ;
+$hor_scale3->show() ;
+
+# A separator
+my $separator1 = Gtk2::HSeparator->new() ;
+$box_root->pack_start( $separator1, FALSE, TRUE, 0 ) ;
+$separator1->show() ;
+
+###############################################################"
+#  KP MENU + KF MENU + RESET BUTTON
+###############################################################"
+
+# A new horizontal box added to the vertical box and contains a manu
+my $box_menu = Gtk2::HBox->new( FALSE, 10 ) ;
+$box_menu->set_border_width( 10 ) ;
+
+#############
+# A keypoint menu
+my $opt = Gtk2::OptionMenu->new() ;
+my $menu = Gtk2::Menu->new() ;
+# There are as many menu items as keypoint IDs
+my $KP_ID = "";
+my $item;
+foreach $KP_ID (@KP_ID_list) {
+    if( !$Cur_KP_ID ) {
+	$Cur_KP_ID = $KP_ID;
+    }
+    $item = make_menu_item( "Keypoint $KP_ID" , \&KP_ID_menu_select, $KP_ID ) ;
+    $menu->append( $item ) ;
+}
+# Menu receives items and is placed in the horizontal box
+$opt->set_menu( $menu ) ;
+$box_menu->pack_start( $opt, TRUE, FALSE, 0 ) ;
+$opt->show() ;
+
+#############
+# A keyframe menu
+my $optKF = Gtk2::OptionMenu->new() ;
+my $menuKF = Gtk2::Menu->new() ;
+# There are as many menu items as keyframe numbers
+my $itemKF;
+for( my $kf = 1 ; $kf <= $Nb_Keyframes ; $kf++ ) {
+    $itemKF = make_menu_item( "Keyframe $kf" , \&KP_KF_menu_select, $kf ) ;
+    $menuKF->append( $itemKF ) ;
+}
+# Menu receives items and is placed in the horizontal box
+$optKF->set_menu( $menuKF ) ;
+$box_menu->pack_start( $optKF, TRUE, FALSE, 0 ) ;
+$optKF->show() ;
+
+#############
+#  A reset button
+# resets the translation of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# to ( 0 , 0 , 0 )
+my $button_reset = Gtk2::Button->new_from_stock( "KP-reset" ) ;
+$button_reset->signal_connect( "clicked" , \&KP_reset ) ;
+$box_menu->pack_start( $button_reset, TRUE, FALSE, 0 ) ;
+$button_reset->can_default( TRUE ) ;
+$button_reset->show() ;
+
+$box_root->pack_start( $box_menu, FALSE, FALSE, 0 ) ;
+$box_menu->show() ;
+
+
+###############################################################"
+#  QUIT BUTTON
+###############################################################"
+
+# A separator
+my $separator = Gtk2::HSeparator->new() ;
+$box_root->pack_start( $separator, FALSE, TRUE, 0 ) ;
+$separator->show() ;
+
+# Quit button
+my $button = Gtk2::Button->new_from_stock( "gtk-quit" ) ;
+$button->signal_connect( "clicked" , \&quit_and_save ) ;
+$box_root->pack_start( $button, FALSE, FALSE, 0 ) ;
+$button->can_default( TRUE ) ;
+$button->grab_default() ;
+$button->show() ;
+$window->show() ;
+
+KP_KF_menu_select( $itemKF , $Cur_KF );
+
+###############################################################"
+# MAIN LOOP
+###############################################################"
+Gtk2->main ;
+
+###############################################################"
+###############################################################"
+#  CALLBACK FUNCTIONS
+###############################################################"
+###############################################################"
+
+### Value access for translation of keypoint $Cur_KP_ID at keyframe $Cur_KF
+sub get_value_KP_KF
+{
+    my ( $ID , $kf , $coord ) = @_ ;
+    my @table;
+    if( $coord eq 'x' ) {
+	@table = split( / / ,$KP_Pos_x{ $Cur_KP_ID } );
+    }
+    elsif( $coord eq 'y' ) {
+	@table = split( / / ,$KP_Pos_y{ $Cur_KP_ID } );
+    }
+    elsif( $coord eq 'z' ) {
+	@table = split( / / ,$KP_Pos_z{ $Cur_KP_ID } );
+    }
+    return $table[$kf - 1];
+}
+
+### Keyframe menu selection: 
+# Updates the x/y/z translations of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# in the three sliders
+# Updates all the keypoint positions 
+# at keyframe $Cur_KF for the graphic engine through message emissions.
+sub KP_KF_menu_select
+{
+    my ( $item, $kf ) = @_ ;
+    $Cur_KF = $kf;
+    # print "Cur_KF $Cur_KF\n";
+    $message_output = FALSE;
+    $adj1->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'x' ) );
+    $adj2->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'y' ) );
+    $adj3->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'z' ) );
+    # triggers message emission for each keypoint
+    foreach $KP_ID ( @KP_ID_list ) {
+	my @valsx = split( / / , $KP_Pos_x{ $KP_ID } ); 
+	my @valsy = split( / / , $KP_Pos_y{ $KP_ID } ); 
+	my @valsz = split( / / , $KP_Pos_z{ $KP_ID } ); 
+	my $message = sprintf "%s %d %f %f %f" , $KP_ID , $Cur_KF ,
+	$valsx[$Cur_KF - 1] , $valsy[$Cur_KF - 1] , $valsz[$Cur_KF - 1] ;
+	if( $message ) {
+	    my $lengthSent = send(SOCKET, $message, 0, $portaddr);
+	    # print $lengthSent . "\n" ;
+	    
+	    $lengthSent == length($message)
+		or die "cannot send to $HOSTNAME ($PORTNO) $lengthSent: $!";
+	    
+	    print "Sent: [$message]\n" ;
+	}
+    }
+}
+
+### Keypoint menu selection: 
+# Updates the x/y/z translations of keypoint $Cur_KP_ID at keyframe $Cur_KF
+# in the three sliders
+# Updates the $Cur_KP_ID keypoint positions 
+# at keyframe $Cur_KF for the graphic engine through message emission.
+sub KP_ID_menu_select
+{
+    my ( $item, $ID ) = @_ ;
+    $Cur_KP_ID = $ID;
+    # print "Cur_KP_ID $Cur_KP_ID\n";
+    $message_output = FALSE;
+    $adj1->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'x' ) );
+    $adj2->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'y' ) );
+    $adj3->set_value( get_value_KP_KF( $Cur_KP_ID , $Cur_KF , 'z' ) );
+    # triggers message emission
+    $message_output = TRUE;
+    &KP_transl_value( $adj1 , 'x' );
+}
+
+### Keypoint translation slider: updates the $Cur_KP_ID keypoint positions 
+# at keyframe $Cur_KF for the graphic engine through message emission.
+sub KP_transl_value
+{
+    my ( $adjustment , $coord ) = @_ ;
+    my @valsx = split( / / , $KP_Pos_x{ $Cur_KP_ID } ); 
+    my @valsy = split( / / , $KP_Pos_y{ $Cur_KP_ID } ); 
+    my @valsz = split( / / , $KP_Pos_z{ $Cur_KP_ID } ); 
+    if( $coord eq 'x' ) {
+	$valsx[$Cur_KF - 1] = $adjustment->get_value;
+	$KP_Pos_x{ $Cur_KP_ID } = join( " " , @valsx );
+    }
+    elsif( $coord eq 'y' ) {
+	$valsy[$Cur_KF - 1] = $adjustment->get_value;
+	$KP_Pos_y{ $Cur_KP_ID } = join( " " , @valsy );
+    }
+    elsif( $coord eq 'z' ) {
+	$valsz[$Cur_KF - 1] = $adjustment->get_value;
+	$KP_Pos_z{ $Cur_KP_ID } = join( " " , @valsz );
+    }
+    if( $message_output ) {
+	my $message = sprintf "%s %d %f %f %f" , $Cur_KP_ID , $Cur_KF ,
+	$valsx[$Cur_KF - 1] , $valsy[$Cur_KF - 1] , $valsz[$Cur_KF - 1] ;
+	if( $message ) {
+	    my $lengthSent = send(SOCKET, $message, 0, $portaddr);
+	    # print $lengthSent . "\n" ;
+	    
+	    $lengthSent == length($message)
+		or die "cannot send to $HOSTNAME ($PORTNO) $lengthSent: $!";
+	    
+	    print "Sent: [$message]\n" ;
+	}
+    }
+}
+
+### Keypoint reset button: 
+# Resets to 0 the x/y/z translations of keypoint $Cur_KP_ID
+# at keyframe $Cur_KF in the three sliders
+# Resets to (0,0,0) the $Cur_KP_ID keypoint positions
+# at keyframe $Cur_KF for the graphic engine through message emission.
+sub KP_reset
+{
+    my @valsx = split( / / , $KP_Pos_x{ $Cur_KP_ID } ); 
+    my @valsy = split( / / , $KP_Pos_y{ $Cur_KP_ID } ); 
+    my @valsz = split( / / , $KP_Pos_y{ $Cur_KP_ID } ); 
+    $valsx[$Cur_KF - 1] = 0.0;
+    $valsy[$Cur_KF - 1] = 0.0;
+    $valsz[$Cur_KF - 1] = 0.0;
+    $KP_Pos_x{ $Cur_KP_ID } = join( " " , @valsx );
+    $KP_Pos_y{ $Cur_KP_ID } = join( " " , @valsy );
+    $KP_Pos_z{ $Cur_KP_ID } = join( " " , @valsz );
+    $message_output = FALSE;
+    $adj1->set_value( 0 );
+    $adj2->set_value( 0 );
+    $adj3->set_value( 0 );
+    # triggers message emission
+    $message_output = TRUE;
+    &KP_transl_value( $adj1 , 'x' );
+}
+
+# Menu item addition for menu construction
+sub make_menu_item
+{
+    my ( $name, $callback, $data ) = @_ ;
+    my $item ;
+    $item = Gtk2::MenuItem->new( $name ) ;
+    $item->signal_connect( "activate" , $callback, $data ) ;
+    $item->show() ;
+    return $item ;
+}
+
+# Loads the keypoint IDs and the tables of keypoint positions 
+# at each keyframe from the .cpp tables (see file heading comments
+# for more details on this format)
+sub load_KFs { 
+    # default file name
+    # my $KPFileName = "Anime_Girl_KP.obj";
+    my $KPFileName = "head_modified_KP.obj";
+    my $KP_ID = "";
+    my $item;
+    my $index = 0;
+
+    my $KPFileNameAux = $KPFileName;
+    $KPFileNameAux =~ s/.obj//;
+    $KPFileNameAux .= "_KF.cpp";
+
+    # reads the last output file
+    # increments a version number until no existing file is found
+    my $ID_file = 1;
+    my $lastOutputFile = "";
+    while( -e $KPFileNameAux ) {
+	$lastOutputFile = $KPFileNameAux;
+	$KPFileNameAux =~ s/[0-9]*.cpp//;
+	$KPFileNameAux .= "$ID_file.cpp";
+	$ID_file++;
+    }
+    if( !$lastOutputFile ) {
+	while( !(-e $KPFileNameAux) ) {
+	    printf "Fichier $KPFileNameAux non trouve\n" ;
+	    printf "Nom du fichier de keyframes: ";
+	    $KPFileNameAux = <STDIN>;
+	    chomp $KPFileNameAux;
+	}
+	$lastOutputFile = $KPFileNameAux;
+    }
+
+    # scans the file
+    if( $lastOutputFile ) {
+	my $coor;
+	my $indKP;
+	my $translation;
+	my @translVect;
+	open( FILEaux , "<$lastOutputFile" ) 
+	    || die "Can't open file '$lastOutputFile'!";
+	print "Loading $lastOutputFile...\n\n";
+	while( <FILEaux> ) {
+	    # reads and stores keypoint IDS
+	    if( /char tab_ID.*\{\s*(.*)\s*\}/ ) {
+		my $KP_list = $1;
+		$KP_list =~ s/\"//g;
+		$KP_list =~ s/\s+$//g;
+		@KP_ID_list = split( /\s*,\s*/ , $KP_list );
+	    }
+
+	    # reads and stores number of keyframes $Nb_Keyframes and current
+	    # coordinates ( 'x', 'y', or 'z' )
+	    elsif( /float tab_KF_([xyz])\[([0-9]+)\]\[([0-9]+)\]/ ) {
+		$coor = $1;
+		$Nb_Keyframes = $3;
+		$indKP = 0;
+	    }
+	    
+	    # reads and stores x, y, or z translations of keypoint $indKP 
+	    # at the $Nb_Keyframes keyframes
+	    elsif( /^\s*\{\s*(.*)\s*\}/ ) {
+		$translation = $1;
+		@translVect = split( /\s*,\s*/ , $translation );
+		if( $coor eq 'x' ) {
+		    $KP_Pos_x{ $KP_ID_list[$indKP] } 
+		    = join( " " , @translVect );
+		}
+		elsif( $coor eq 'y' ) {
+		    $KP_Pos_y{ $KP_ID_list[$indKP] } 
+		    = join( " " , @translVect );
+		}
+		elsif( $coor eq 'z' ) {
+		    $KP_Pos_z{ $KP_ID_list[$indKP] } 
+		    = join( " " , @translVect );
+		}
+		$indKP++;
+	    }
+	}
+	close( FILEaux ); 
+    }
+}
+
+# Saves the keypoint IDs and the tables of keypoint positions 
+# at each keyframe through tables into a new .cpp file (see file
+# heading comments for more details on this format)
+sub quit_and_save { 
+    my $KP_ID;
+    my $index = 0;
+    # my $KPFileName = "Anime_Girl_KP_KF.cpp";
+    my $KPFileName = "head_modified_KP_KF.cpp";
+
+    # does not overwrite the input file
+    # increments a version number until no existing file is found
+    my $ID_file = 1;
+    while( -e $KPFileName ) {
+	$KPFileName =~ s/[0-9]*.cpp//;
+	$KPFileName .= "$ID_file.cpp";
+	$ID_file++;
+    }
+    
+    open( FILEaux , ">$KPFileName" ) 
+	|| die "Can't open file '$KPFileName'!";
+
+    # writes keypoint IDS
+    printf( FILEaux "char tab_ID[%d][16] = { \"%s\" };\n" , 
+	    @KP_ID_list + 0 , join( "\" , \"" , @KP_ID_list ) );
+
+    # writes number of keyframes and writes x coordinates for each 
+    # keypoint at each keyframe
+    $index = 0;
+    printf( FILEaux "float tab_KF_x[%d][$Nb_Keyframes] = { \n" ,  
+	    @KP_ID_list + 0 );
+    foreach $KP_ID ( @KP_ID_list ) {
+	my @valsx = split( / / , $KP_Pos_x{ $KP_ID } ); 
+	printf FILEaux "    { %s } " , join( " , " , @valsx ) ; 
+	if( $index < @KP_ID_list - 1 ) {
+	    printf FILEaux " , \n";
+	}
+	else {
+	    printf FILEaux "\n }; \n";
+	}
+	$index++;
+    }
+
+    # writes number of keyframes and writes y coordinates for each 
+    # keypoint at each keyframe
+    $index = 0;
+    printf( FILEaux "float tab_KF_y[%d][$Nb_Keyframes] = { \n" ,  
+	    @KP_ID_list + 0 );
+    foreach $KP_ID ( @KP_ID_list ) {
+	my @valsy = split( / / , $KP_Pos_y{ $KP_ID } ); 
+	printf FILEaux "    { %s } " , join( " , " , @valsy ) ; 
+	if( $index < @KP_ID_list - 1 ) {
+	    printf FILEaux " , \n";
+	}
+	else {
+	    printf FILEaux "\n }; \n";
+	}
+	$index++;
+    }
+
+    # writes number of keyframes and writes z coordinates for each 
+    # keypoint at each keyframe
+    $index = 0;
+    printf( FILEaux "float tab_KF_z[%d][$Nb_Keyframes] = { \n" ,  
+	    @KP_ID_list + 0 );
+    foreach $KP_ID ( @KP_ID_list ) {
+	my @valsz = split( / / , $KP_Pos_z{ $KP_ID } ); 
+	printf FILEaux "    { %s } " , join( " , " , @valsz ) ; 
+	if( $index < @KP_ID_list - 1 ) {
+	    printf FILEaux " , \n";
+	}
+	else {
+	    printf FILEaux "\n }; \n";
+	}
+	$index++;
+    }
+
+    # closes output file 
+    close( FILEaux );
+
+    # quits the interface
+    Gtk2->main_quit ; 
+}
