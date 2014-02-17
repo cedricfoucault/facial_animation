@@ -11,11 +11,10 @@ The resulting program can be executed:
     
 The program should compile and run correctly both on Linux and Mac OSX.
 
-
 Usage
 ------------
 
-The program will display the default mesh and wait for user input. You can interact with the program through keyboard input:
+Type 'enter' after executing the program to use the default mesh. The program will display the default mesh and wait for user input. You can interact with the program through keyboard input:
 
     >   zoom in
     <   zoom out
@@ -38,6 +37,12 @@ The program will display the default mesh and wait for user input. You can inter
     a   use the inverse-distance weighting scheme to position vertices w.r.t key points
     s   use the linear weighting scheme to position vertices w.r.t key points
     
+Alternatively, you can use the "high polygon" version of the mesh (after 1 level of subdivision surface has been applied), but I haven't designed the facial expression using this mesh, so I'm not sure about the quality of the results. To use this mesh, do:
+
+    ./KP-anim-modele head_modified_highpoly.obj
+
+or type "head_modified_highpoly.obj" when prompted.
+
 Enjoy!
 
 

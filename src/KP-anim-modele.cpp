@@ -490,16 +490,15 @@ int main(int argc, char **argv)
     strcpy( MeshFileName , argv[1] );
   }
   else {    
-    // printf( "Mesh file (Anime_Girl.obj):" );
-    // fflush( stdin );
-    // fgets( MeshFileName , STRINGSIZE , stdin );
-    // if( *MeshFileName == '\n' ) {
-    //   strcpy( MeshFileName , "Anime_Girl.obj" ); ;
-    // }
-    // else {
-    //   MeshFileName[ strlen( MeshFileName ) - 1 ] = 0; 
-    // }
-      strcpy( MeshFileName , "head_modified.obj" );
+    printf( "Mesh file (head_modified.obj):" );
+    fflush( stdin );
+    fgets( MeshFileName , STRINGSIZE , stdin );
+    if( *MeshFileName == '\n' ) {
+      strcpy( MeshFileName , "head_modified.obj" ); ;
+    }
+    else {
+      MeshFileName[ strlen( MeshFileName ) - 1 ] = 0; 
+    }
   }
   strcpy( KPFileName , MeshFileName ); ;
   KPFileName[ strlen( KPFileName ) - 4 ] = 0; 
